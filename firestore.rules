@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isSelf(userId) { return signedIn() && request.auth.uid == userId; }
+    function isAdmin() {
+      return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['PLATFORM_ADMIN', 'SUPER_ADMIN'];
+    }
+    function hasRole(roles) {
+      return signedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in roles;
+    }
+    function userUniversityId() {
+      return signedIn() ? (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId
+        || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organization_id) : null;
+    }
+    function sameUniversity(data) { return signedIn() && data.universityId == userUniversityId(); }
+    function isGovernment() { return hasRole(['PANCHAYAT_OFFICER', 'ULB_OFFICER', 'DISTRICT_OFFICER', 'GOVERNMENT_OFFICER', 'DEPARTMENT_ADMIN', 'PROJECT_OFFICER', 'FINANCE_OFFICER', 'ANALYTICS_OFFICER']); }
+    function canReadPublic() { return resource.data.visibility == 'PUBLIC' || resource.data.public == true; }
+    function ownedByUser() { return signedIn() && (resource.data.ownerId == request.auth.uid || resource.data.userId == request.auth.uid || resource.data.submittedBy == request.auth.uid || resource.data.authorId == request.auth.uid); }
+
+    match /users/{userId} {
+      allow create: if isSelf(userId);
+      allow read: if isSelf(userId) || isAdmin() || hasRole(['PANCHAYAT_OFFICER', 'ULB_OFFICER', 'DISTRICT_OFFICER', 'GOVERNMENT_OFFICER', 'DEPARTMENT_ADMIN', 'PROJECT_OFFICER', 'FINANCE_OFFICER', 'ANALYTICS_OFFICER']);
+      allow update: if isSelf(userId) || isAdmin();
+      allow delete: if isSelf(userId) || isAdmin();
+      match /{subcollection}/{documentId} {
+        allow read, write: if isSelf(userId) || isAdmin();
+      }
+    }
+
+    match /challenges/{challengeId} {
+      allow read: if signedIn() || canReadPublic();
+      allow create: if signedIn() && request.resource.data.submittedBy == request.auth.uid;
+      allow update, delete: if isAdmin() || (signedIn() && resource.data.submittedBy == request.auth.uid);
+      match /{subcollection}/{documentId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.authorId == request.auth.uid || request.resource.data.userId == request.auth.uid;
+        allow update, delete: if signedIn() && (resource.data.authorId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+      }
+    }
+
+    match /organizations/{documentId} { allow read: if signedIn() || canReadPublic(); allow write: if isAdmin(); }
+    match /faculty/{documentId} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /students/{documentId} { allow read: if signedIn(); allow write: if isSelf(documentId) || isAdmin(); }
+    match /facultyMentors/{mentorId} {
+      allow read: if isAdmin() || isGovernment() || sameUniversity(resource.data);
+      allow create: if isAdmin() || sameUniversity(request.resource.data);
+      allow update, delete: if isAdmin() || sameUniversity(resource.data);
+    }
+    match /teams/{teamId} {
+      allow read: if isAdmin() || isGovernment() || sameUniversity(resource.data);
+      allow create: if isAdmin() || sameUniversity(request.resource.data);
+      allow update, delete: if isAdmin() || sameUniversity(resource.data);
+    }
+    match /projects/{projectId} {
+      allow read: if isAdmin() || isGovernment() || sameUniversity(resource.data) || canReadPublic();
+      allow create: if isAdmin() || isGovernment() || sameUniversity(request.resource.data);
+      allow update, delete: if isAdmin() || isGovernment() || (sameUniversity(resource.data) && (resource.data.ownerId == request.auth.uid || resource.data.createdBy == request.auth.uid));
+      match /{subcollection}/{documentId} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow update, delete: if signedIn() && (isAdmin() || resource.data.ownerId == request.auth.uid || resource.data.createdBy == request.auth.uid);
+      }
+    }
+
+    match /problems/{problemId} {
+      allow read: if isAdmin()
+        || hasRole(['PANCHAYAT_OFFICER', 'ULB_OFFICER', 'DISTRICT_OFFICER', 'GOVERNMENT_OFFICER', 'DEPARTMENT_ADMIN', 'PROJECT_OFFICER', 'FINANCE_OFFICER', 'ANALYTICS_OFFICER', 'STUDENT', 'FACULTY', 'UNIVERSITY_ADMIN', 'INDUSTRY_PARTNER', 'STARTUP', 'MSME', 'CSR_PARTNER', 'RESEARCH_LAB', 'MENTOR'])
+        || (signedIn() && resource.data.public == true)
+        || (signedIn() && resource.data.createdBy == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.createdBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voiceRecordingUrl', 'voiceStoragePath', 'updatedAt']))
+        || (hasRole(['PANCHAYAT_OFFICER', 'ULB_OFFICER', 'DISTRICT_OFFICER', 'GOVERNMENT_OFFICER', 'DEPARTMENT_ADMIN', 'PROJECT_OFFICER', 'FINANCE_OFFICER', 'ANALYTICS_OFFICER'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'governmentStatus', 'governmentVerificationStatus', 'governmentDepartment', 'governmentRemarks', 'governmentVerifiedBy', 'governmentVerifiedAt', 'verifiedBy', 'verifiedAt', 'clarificationRequest', 'currentStage', 'progress', 'isPublished', 'publishedAt', 'publishedBy', 'challengeStatus', 'aiRecommendedCollaboration', 'aiSuggestedUniversityDomain', 'aiSuggestedIndustryDomain', 'aiRequiredExpertise', 'aiRecommendedAction', 'aiReasoning', 'collaborationType', 'collaborationConfirmedBy', 'collaborationConfirmedAt', 'universityId', 'universityName', 'universityDepartment', 'facultyMentorId', 'facultyMentorName', 'studentTeamId', 'studentTeamName', 'industryPartnerId', 'industryPartnerName', 'industryMentorId', 'industryMentorName', 'industrySupportType', 'updatedAt']))
+        || (hasRole(['STUDENT', 'FACULTY', 'UNIVERSITY_ADMIN'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['universityInterest', 'universityId', 'universityName', 'universityDepartment', 'studentTeamId', 'studentTeamName', 'facultyMentorId', 'facultyMentorName', 'currentStage', 'progress', 'updatedAt']))
+        || (hasRole(['INDUSTRY_PARTNER', 'STARTUP', 'MSME', 'CSR_PARTNER', 'RESEARCH_LAB', 'MENTOR'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['industryInterest', 'industryPartnerId', 'industryPartnerName', 'industryMentorId', 'industryMentorName', 'industrySupportType', 'currentStage', 'progress', 'updatedAt']));
+      allow delete: if isAdmin() || (signedIn() && resource.data.createdBy == request.auth.uid);
+    }
+
+    match /solutions/{documentId} { allow read: if signedIn() || canReadPublic(); allow write: if signedIn(); }
+    match /notifications/{documentId} {
+      allow read, update: if signedIn() && resource.data.recipientId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.recipientId is string;
+      allow delete: if signedIn() && resource.data.recipientId == request.auth.uid;
+    }
+    match /{collection}/{documentId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if signedIn() && (isAdmin() || ownedByUser());
+    }
+  }
+}
